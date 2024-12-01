@@ -1,0 +1,36 @@
+model:
+  provider: "openai"
+  name: "gpt-4"
+  temperature: 0.2
+  max_tokens: 2000
+  request_timeout: 30
+
+decision_making:
+  risk_tolerance: "moderate"  # Options: conservative, moderate, aggressive
+  min_confidence_threshold: 0.8
+  decision_interval: 300  # seconds between autonomous decisions
+  
+  market_analysis:
+    sentiment_weight: 0.3
+    technical_weight: 0.4
+    fundamental_weight: 0.3
+    min_data_points: 10
+    
+  trading_parameters:
+    min_liquidity: 1000  # Minimum liquidity in USD
+    max_slippage: 0.02  # Maximum allowed slippage
+    position_sizing:
+      max_single_position: 0.1  # Maximum size of single position as fraction of portfolio
+      max_total_exposure: 0.5  # Maximum total exposure as fraction of portfolio
+
+memory:
+  storage_type: "local"  # Options: local, redis, postgresql
+  max_history_size: 1000  # Maximum number of historical actions to store
+  retention_period: 30  # Days to retain historical data
+  
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  epochs: 100
+  validation_split: 0.2
+  early_stopping_patience: 10

@@ -1,0 +1,33 @@
+networks:
+  base_sepolia:
+    chain_id: 84532
+    rpc_url: "https://sepolia.base.org"
+    explorer_url: "https://sepolia.basescan.org"
+    is_testnet: true
+    default: true
+  
+  base_mainnet:
+    chain_id: 8453
+    rpc_url: "https://mainnet.base.org"
+    explorer_url: "https://basescan.org"
+    is_testnet: false
+
+contracts:
+  token_factory:
+    address: "0x1234...5678"
+    min_deployment_cost: 0.1
+  
+  nft_factory:
+    address: "0x5678...1234"
+    min_deployment_cost: 0.15
+    
+  dex:
+    uniswap_factory: "0x9876...5432"
+    uniswap_router: "0x4321...8765"
+    weth_address: "0x3456...7890"
+
+gas:
+  strategy: "dynamic"  # Options: dynamic, fixed
+  max_priority_fee: 2  # gwei
+  max_fee: 100  # gwei
+  retry_interval: 60  # seconds

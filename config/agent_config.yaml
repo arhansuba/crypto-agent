@@ -1,0 +1,28 @@
+agent:
+  name: "CDP AI Crypto Agent"
+  version: "1.0.0"
+  mode: "autonomous"  # Options: autonomous, interactive
+  operating_hours:
+    start_time: "00:00"
+    end_time: "23:59"
+    timezone: "UTC"
+  
+security:
+  max_transaction_value: 1.0  # Maximum transaction value in ETH
+  gas_limit: 3000000
+  max_daily_transactions: 100
+  approved_contracts:
+    - "0x1234...5678"  # List of approved smart contract addresses
+  
+wallet:
+  auto_request_funds: true  # Automatically request testnet funds when balance is low
+  min_balance_threshold: 0.1  # Minimum balance in ETH before requesting funds
+  persistent_storage: "wallet_data.json"
+
+monitoring:
+  log_level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR
+  log_file: "agent.log"
+  metrics_collection: true
+  alert_thresholds:
+    gas_price: 100  # Alert if gas price exceeds this value (gwei)
+    failed_transactions: 3  # Alert after this many consecutive failed transactions

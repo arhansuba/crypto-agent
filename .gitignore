@@ -1,0 +1,10 @@
+# .gitignore
+.env
+*.log
+logs/
+data/
+models/
+wallet_data.txt
+__pycache__/
+.pytest_cache/
+*.pyc
