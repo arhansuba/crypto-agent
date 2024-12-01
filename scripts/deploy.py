@@ -11,13 +11,15 @@ from pathlib import Path
 from typing import Dict, Optional
 import logging
 from web3 import Web3
+import sys
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from src.agent.core import CryptoAgent
-from src.blockchain.contracts.erc20 import ERC20TokenContract
-from src.blockchain.contracts.nft import NFTContract
-from src.blockchain.contracts.liquidity_pool import LiquidityPool
-from src.utils.logger import CryptoAgentLogger
-from src.utils.config import ConfigManager
+from agent.core.core import AgentCore
+from agent.blockchain.contracts.erc20 import ERC20TokenContract
+from agent.blockchain.contracts.nft import NFTContract
+from agent.blockchain.contracts.liquidity_pool import LiquidityPool
+from agent.utils.logger import CryptoAgentLogger
+from agent.utils.config import ConfigManager
 
 async def deploy_contracts(
     config: Dict,
@@ -67,14 +69,14 @@ async def initialize_agent(
     config: Dict,
     contracts: Dict[str, str],
     logger: logging.Logger
-) -> CryptoAgent:
+) -> AgentCore:
     """Initialize the AI crypto agent"""
     try:
         # Update config with deployed contract addresses
         config['contracts']['addresses'] = contracts
         
         # Initialize agent
-        agent = CryptoAgent(config, logger)
+        agent = AgentCore(config, logger)
         await agent.initialize()
         
         return agent
