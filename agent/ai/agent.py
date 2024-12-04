@@ -24,6 +24,20 @@ class CDPAgentManager:
         self.token_monitor = CDPTokenMonitor(self.toolkit)
         
         # Initialize execution components
+class CDPTransactionManager:
+    """Handles transaction execution using CDP toolkit."""
+    
+    def __init__(self, toolkit: CdpToolkit):
+        self.toolkit = toolkit
+        
+    async def execute_transaction(self, transaction_data: Dict) -> Dict:
+        """Execute a transaction using CDP."""
+        tools = self.toolkit.get_tools()
+        
+        # Execute transaction
+        result = await tools.execute_transaction(transaction_data)
+        
+        return result
         self.transaction_manager = CDPTransactionManager(self.toolkit)
     
     async def initialize_user_wallet(self, user_id: int) -> Dict:

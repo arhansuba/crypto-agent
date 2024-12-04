@@ -2,9 +2,9 @@ from typing import Dict, Optional, List, Tuple
 from telegram import Update
 from telegram.ext import ContextTypes
 import logging
-from ..ai.agent import CDPTradingAgent
-from ..services.subscription import SubscriptionService
-from ..services.user_manager import UserManager
+from .ai.agent import CDPTradingAgent
+from .services.subscription import SubscriptionService
+from .services.user_manager import UserManager
 
 class CommandProcessor:
     def __init__(self, config: Dict):

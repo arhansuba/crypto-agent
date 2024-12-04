@@ -8,9 +8,9 @@ from telegram.ext import (
 )
 import logging
 from typing import Dict, Optional
-from ..ai.agent import CDPTradingAgent
-from ..services.subscription import SubscriptionService
-from ..services.user_manager import UserManager
+from .ai.agent import CDPTradingAgent
+from .services.subscription import SubscriptionService
+from .services.user_manager import UserManager
 
 class TelegramBot:
     def __init__(self, config: Dict):
