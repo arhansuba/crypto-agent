@@ -16,3 +16,5 @@ eth-utils
 tweepy
 aiohttp
 cryptography
+swarm
+openai

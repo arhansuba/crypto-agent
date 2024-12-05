@@ -1,199 +1,148 @@
-from fastapi import FastAPI, WebSocket, Request
+from fastapi import FastAPI, WebSocket, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import asyncio
-from agents import based_agent, agent_wallet, request_eth_from_faucet, get_balance
-from swarm import Swarm
-import uvicorn
 from typing import Optional, Dict, Any, List
+import uvicorn
 
-app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+from agents import AIEnhancedAgent
+from utils.logger import get_logger
+from utils.config_manager import ConfigManager
+from risk.portfolio_manager import PortfolioManager
+from analysis.market_analyzer import MarketAnalyzer
+from analysis.sentiment_scanner import SentimentScanner
 
-# Store active WebSocket connections and agent task
-active_connections: List[WebSocket] = []
-agent_task: Optional[asyncio.Task] = None
-client = Swarm()
+logger = get_logger(__name__)
 
-async def display_initial_wallet_info(websocket: WebSocket):
-    """Display initial wallet information via WebSocket."""
-    try:
-        # Display wallet address
-        await websocket.send_json({
-            "message": f"Agent wallet address: {agent_wallet.default_address.address_id}",
-            "type": "wallet"
-        })
+class AITradingApplication:
+    def __init__(self):
+        self.app = FastAPI(title="AI-Enhanced CDP Trading Platform")
+        self.config = ConfigManager("config/agent_config.yaml")
+        self.agent = AIEnhancedAgent(self.config.get_agent_config())
+        self.market_analyzer = MarketAnalyzer(self.config.get_market_config())
+        self.portfolio_manager = PortfolioManager(self.config.get_risk_config())
+        self.sentiment_scanner = SentimentScanner(self.config.get_sentiment_config())
+        
+        self.active_connections: List[WebSocket] = []
+        self.agent_tasks: Dict[str, asyncio.Task] = {}
+        
+        self._setup_routes()
+        self._setup_static_files()
 
-        # Request ETH from faucet and display transaction
+    def _setup_routes(self):
+        """Initialize FastAPI routes and WebSocket endpoints."""
+        self.app.get("/")(self.root)
+        self.app.websocket("/ws")(self.websocket_endpoint)
+        self.app.post("/api/execute-trade")(self.execute_trade)
+        self.app.get("/api/market-analysis")(self.get_market_analysis)
+        self.app.get("/api/portfolio-status")(self.get_portfolio_status)
+
+    def _setup_static_files(self):
+        """Configure static files and templates."""
+        self.app.mount("/static", StaticFiles(directory="static"), name="static")
+        self.templates = Jinja2Templates(directory="templates")
+
+    async def display_agent_status(self, websocket: WebSocket):
+        """Send agent status information via WebSocket."""
         try:
-            faucet_result = request_eth_from_faucet()
+            wallet_info = await self.agent.get_wallet_info()
+            market_state = await self.market_analyzer.get_current_state()
+            portfolio_status = await self.portfolio_manager.get_status()
+
             await websocket.send_json({
-                "message": f"Faucet transaction: {faucet_result}",
-                "type": "transaction"
-            })
-        except Exception as e:
-            await websocket.send_json({
-                "message": f"Error requesting from faucet: {str(e)}",
-                "type": "system"
+                "wallet_info": wallet_info,
+                "market_state": market_state,
+                "portfolio_status": portfolio_status,
+                "type": "status_update"
             })
 
-        # Display current balance
+        except Exception as e:
+            logger.error(f"Status display error: {str(e)}")
+            await self._send_error(websocket, "Status update failed", str(e))
+
+    async def process_agent_response(self, response: Dict[str, Any], websocket: WebSocket):
+        """Process and send agent responses via WebSocket."""
         try:
-            balance = get_balance("eth")
-            await websocket.send_json({
-                "message": f"Current ETH balance: {balance}",
-                "type": "wallet"
-            })
+            for chunk in response:
+                if chunk.get("type") == "market_update":
+                    await self._handle_market_update(chunk, websocket)
+                elif chunk.get("type") == "trade_execution":
+                    await self._handle_trade_execution(chunk, websocket)
+                elif chunk.get("type") == "risk_alert":
+                    await self._handle_risk_alert(chunk, websocket)
+
         except Exception as e:
-            await websocket.send_json({
-                "message": f"Error getting balance: {str(e)}",
-                "type": "system"
-            })
+            logger.error(f"Response processing error: {str(e)}")
+            await self._send_error(websocket, "Response processing failed", str(e))
 
-    except Exception as e:
-        await websocket.send_json({
-            "message": f"Error displaying wallet info: {str(e)}",
-            "type": "system"
+    async def agent_monitoring_loop(self, websocket: WebSocket):
+        """Main monitoring loop for the AI trading agent."""
+        try:
+            while True:
+                # Analyze market conditions
+                market_analysis = await self.market_analyzer.analyze_market_conditions()
+                sentiment_data = await self.sentiment_scanner.analyze_market_sentiment()
+
+                # Generate and execute trading strategy
+                if await self.portfolio_manager.should_execute_trades(market_analysis):
+                    strategy = await self.agent.generate_trading_strategy(
+                        market_analysis=market_analysis,
+                        sentiment_data=sentiment_data
+                    )
+                    
+                    execution_result = await self.agent.execute_ai_trading(
+                        strategy_type=strategy["type"],
+                        params=strategy["params"]
+                    )
+
+                    await self._send_execution_update(websocket, execution_result)
+
+                await asyncio.sleep(self.config.get("monitoring_interval"))
+
+        except Exception as e:
+            logger.error(f"Agent monitoring error: {str(e)}")
+            await self._send_error(websocket, "Agent monitoring failed", str(e))
+
+    async def root(self, request: Request):
+        """Serve the main application page."""
+        return self.templates.TemplateResponse("index.html", {
+            "request": request,
+            "agent_status": await self.agent.get_status()
         })
 
-async def process_streaming_response(response, websocket: WebSocket):
-    """Process streaming responses from the agent and send them via WebSocket."""
-    content = ""
-    last_sender = ""
+    async def websocket_endpoint(self, websocket: WebSocket):
+        """Handle WebSocket connections for real-time updates."""
+        await websocket.accept()
+        self.active_connections.append(websocket)
 
-    try:
-        for chunk in response:
-            if "sender" in chunk:
-                last_sender = chunk["sender"]
+        try:
+            await self.display_agent_status(websocket)
+            
+            while True:
+                data = await websocket.receive_json()
+                await self._handle_websocket_message(data, websocket)
 
-            if "content" in chunk and chunk["content"] is not None:
-                if not content and last_sender:
-                    await websocket.send_json({
-                        "message": chunk["content"],
-                        "type": "agent"
-                    })
-                content += chunk["content"]
+        except Exception as e:
+            logger.error(f"WebSocket error: {str(e)}")
+        finally:
+            await self._cleanup_connection(websocket)
 
-            if "tool_calls" in chunk and chunk["tool_calls"] is not None:
-                for tool_call in chunk["tool_calls"]:
-                    f = tool_call["function"]
-                    name = f["name"]
-                    if name:
-                        await websocket.send_json({
-                            "message": f"Executing: {name}()",
-                            "type": "tool"
-                        })
+    async def execute_trade(self, trade_request: Dict[str, Any]):
+        """Execute trade with AI optimization."""
+        try:
+            execution_result = await self.agent.execute_ai_trading(
+                strategy_type=trade_request["strategy_type"],
+                params=trade_request["params"]
+            )
+            return {"status": "success", "result": execution_result}
+        except Exception as e:
+            logger.error(f"Trade execution error: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
 
-            if "delim" in chunk and chunk["delim"] == "end" and content:
-                content = ""
-
-            if "response" in chunk:
-                return chunk["response"]
-
-    except Exception as e:
-        await websocket.send_json({
-            "message": f"Error processing response: {str(e)}",
-            "type": "system"
-        })
-
-async def agent_loop(websocket: WebSocket):
-    """Main agent loop that runs autonomously."""
-    messages = []
-    interval = 10  # seconds between actions
-
-    try:
-        while True:
-            try:
-                # Generate thought
-                thought = (
-                    f"It's been {interval} seconds. I want you to do some sort of "
-                    "onchain action based on my capabilities. Let's get crazy and "
-                    "creative! Don't take any more input from me, and if this is "
-                    "your first command don't generate art"
-                )
-                messages.append({"role": "user", "content": thought})
-
-                await websocket.send_json({
-                    "message": thought,
-                    "type": "system"
-                })
-
-                # Run the agent
-                response = client.run(
-                    agent=based_agent,
-                    messages=messages,
-                    stream=True
-                )
-
-                # Process the streaming response
-                await process_streaming_response(response, websocket)
-
-                # Wait for the specified interval
-                await asyncio.sleep(interval)
-
-            except Exception as e:
-                await websocket.send_json({
-                    "message": f"Error in agent loop: {str(e)}",
-                    "type": "system"
-                })
-                await asyncio.sleep(interval)
-
-    except Exception as e:
-        await websocket.send_json({
-            "message": f"Critical error: {str(e)}. Please refresh the page.",
-            "type": "system"
-        })
-
-@app.get("/")
-async def root(request: Request):
-    """Serve the main HTML page."""
-    return templates.TemplateResponse("index.html", {"request": request})
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """Handle WebSocket connections and agent control."""
-    global agent_task
-
-    await websocket.accept()
-    active_connections.append(websocket)
-
-    try:
-        await websocket.send_json({
-            "message": "Connected to server. Click \"Start Agent\" to begin...",
-            "type": "system"
-        })
-
-        while True:
-            data = await websocket.receive_json()
-
-            if data.get("action") == "start":
-                if agent_task is None or agent_task.done():
-                    await websocket.send_json({
-                        "message": "Starting agent...",
-                        "type": "system"
-                    })
-                    # Display wallet info before starting the agent
-                    await display_initial_wallet_info(websocket)
-                    agent_task = asyncio.create_task(agent_loop(websocket))
-
-            elif data.get("action") == "stop":
-                if agent_task and not agent_task.done():
-                    agent_task.cancel()
-                    await websocket.send_json({
-                        "message": "Agent stopped.",
-                        "type": "system"
-                    })
-
-    except Exception as e:
-        await websocket.send_json({
-            "message": f"WebSocket error: {str(e)}",
-            "type": "system"
-        })
-
-    finally:
-        if websocket in active_connections:
-            active_connections.remove(websocket)
+    def run(self):
+        """Start the FastAPI application."""
+        uvicorn.run(self.app, host="0.0.0.0", port=3000)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=3000)
+    trading_app = AITradingApplication()
+    trading_app.run()

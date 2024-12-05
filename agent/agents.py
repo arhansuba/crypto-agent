@@ -8,11 +8,141 @@ from typing import Union
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 from cdp.errors import UnsupportedAssetError
-from cdp import Cdp, Wallet  # Changed from cdp_sdk to cdp
-from typing import Dict, Any
-import os
-from openai import OpenAI
+from typing import List
+import asyncio
 
+# Internal imports
+from ai.training.trainer import AIModelTrainer
+from analysis.market_analyzer import MarketAnalyzer
+from analysis.pattern_detector import PatternDetector
+from analysis.sentiment_scanner import SentimentScanner
+from risk.portfolio_manager import PortfolioManager
+from utils.logger import get_logger
+from utils.config_manager import ConfigManager
+
+logger = get_logger(__name__)
+
+class AIEnhancedAgent:
+    """
+    Enhanced CDP agent that combines Coinbase Developer Platform capabilities with 
+    AI-powered analysis and decision making.
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        # Initialize configuration
+        self.config = ConfigManager(config)
+        self._initialize_environment()
+        
+        # Initialize CDP wallet
+        self.agent_wallet = self._setup_wallet()
+        
+        # Initialize AI components
+        self.market_predictor = self._initialize_market_predictor()
+        self.market_analyzer = MarketAnalyzer(self.config.get_market_config())
+        self.pattern_detector = PatternDetector(self.config.get_pattern_config())
+        self.sentiment_scanner = SentimentScanner(self.config.get_sentiment_config())
+        
+        # Initialize risk management
+        self.portfolio_manager = PortfolioManager(
+            self.config.get_risk_config(),
+            market_predictor=self.market_predictor
+        )
+        
+        # Initialize model trainer
+        self.model_trainer = AIModelTrainer(
+            models={
+                "market": self.market_predictor,
+                "pattern": self.pattern_detector.model,
+                "sentiment": self.sentiment_scanner.model
+            },
+            config=self.config.get_training_config()
+        )
+        
+        logger.info(f"AI Enhanced Agent initialized with wallet: {self.agent_wallet.default_address.address_id}")
+
+    def _initialize_environment(self):
+        """Initialize CDP environment and API keys"""
+        API_KEY_NAME = os.environ.get("CDP_API_KEY_NAME")
+        PRIVATE_KEY = os.environ.get("CDP_PRIVATE_KEY", "").replace('\\n', '\n')
+        Cdp.configure(API_KEY_NAME, PRIVATE_KEY)
+
+    def _setup_wallet(self) -> Wallet:
+        """Initialize and configure CDP wallet with persistence"""
+        try:
+            wallet_path = self.config.get("wallet_path")
+            if os.path.exists(wallet_path):
+                # Load existing wallet
+                wallet_data = self._load_wallet_data(wallet_path)
+                wallet = Wallet.import_data(wallet_data)
+                logger.info("Loaded existing wallet")
+            else:
+                # Create new wallet
+                wallet = Wallet.create(network_id=self.config.get("network_id"))
+                self._persist_wallet_data(wallet, wallet_path)
+                logger.info("Created new wallet")
+
+            # Request faucet funds if needed
+            self._request_initial_funds(wallet)
+            return wallet
+
+        except Exception as e:
+            logger.error(f"Wallet setup failed: {str(e)}")
+            raise
+
+    async def create_token_with_analysis(
+        self, 
+        name: str, 
+        symbol: str, 
+        initial_supply: int
+    ) -> Dict[str, Any]:
+        """
+        Create new token with AI-powered market analysis and optimization.
+        
+        Args:
+            name: Token name
+            symbol: Token symbol
+            initial_supply: Initial token supply
+            
+        Returns:
+            Dict containing token details and market analysis
+        """
+        try:
+            # Analyze market conditions
+            market_analysis = await self.market_analyzer.analyze_market_conditions()
+            sentiment_score = await self.sentiment_scanner.analyze_token_sentiment(symbol)
+            
+            # Get AI prediction
+            launch_prediction = await self.market_predictor.predict_token_performance(
+                market_state=market_analysis,
+                sentiment=sentiment_score
+            )
+
+            # Validate launch conditions
+            if not self._validate_token_launch(launch_prediction):
+                return {
+                    "status": "rejected",
+                    "reason": "Market conditions unfavorable",
+                    "analysis": launch_prediction
+                }
+
+            # Deploy token
+            deployed_contract = self.agent_wallet.deploy_token(
+                name, 
+                symbol, 
+                initial_supply
+            )
+            deployed_contract.wait()
+            
+            return {
+                "status": "success",
+                "contract_address": deployed_contract.contract_address,
+                "analysis": launch_prediction,
+                "market_conditions": market_analysis
+            }
+
+        except Exception as e:
+            logger.error(f"Token creation failed: {str(e)}")
+            return {"status": "error", "reason": str(e)}
 # Get configuration from environment variables
 API_KEY_NAME = os.environ.get("CDP_API_KEY_NAME")
 PRIVATE_KEY = os.environ.get("CDP_PRIVATE_KEY", "").replace('\\n', '\n')
@@ -511,7 +641,172 @@ def request_eth_from_faucet():
 
     faucet_tx = agent_wallet.faucet()
     return f"Requested ETH from faucet. Transaction: {faucet_tx}"
+async def execute_ai_trading(self, strategy_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute trades with AI-driven analysis and optimization.
+        
+        Args:
+            strategy_type: Type of trading strategy to execute
+            params: Trading parameters and constraints
+            
+        Returns:
+            Dict containing execution results and analysis
+        """
+        try:
+            # Analyze market conditions and predict outcomes
+            market_state = await self.market_analyzer.get_current_state()
+            prediction = await self.market_predictor.predict_trade_outcome(
+                strategy_type=strategy_type,
+                market_state=market_state,
+                params=params
+            )
 
+            # Validate trade against risk parameters
+            risk_assessment = await self.portfolio_manager.assess_trade_risk(
+                prediction=prediction,
+                market_state=market_state
+            )
+
+            if not risk_assessment["approved"]:
+                return {
+                    "status": "rejected",
+                    "reason": risk_assessment["reason"],
+                    "analysis": prediction
+                }
+
+            # Execute the trade through CDP
+            execution_result = await self._execute_cdp_trade(
+                strategy_type=strategy_type,
+                params=params,
+                optimization=prediction["optimization"]
+            )
+
+            # Record trade data for model training
+            await self.model_trainer.record_trade_data(
+                strategy_type=strategy_type,
+                prediction=prediction,
+                result=execution_result
+            )
+
+            return {
+                "status": "success",
+                "execution": execution_result,
+                "analysis": prediction,
+                "risk_assessment": risk_assessment
+            }
+
+        except Exception as e:
+            logger.error(f"AI trading execution failed: {str(e)}")
+            return {"status": "error", "reason": str(e)}
+
+async def _execute_cdp_trade(
+        self, 
+        strategy_type: str, 
+        params: Dict[str, Any], 
+        optimization: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Execute optimized trade through CDP with the specified strategy.
+        """
+        try:
+            if strategy_type == "transfer":
+                transfer = self.agent_wallet.transfer(
+                    amount=params["amount"],
+                    asset_id=params["asset_id"],
+                    destination_address=params["destination"],
+                    gasless=optimization.get("use_gasless", False)
+                )
+                transfer.wait()
+                return {"transaction_hash": transfer.transaction_hash}
+
+            elif strategy_type == "swap":
+                if self.agent_wallet.network_id != "base-mainnet":
+                    return {"error": "Swaps only available on mainnet"}
+
+                trade = self.agent_wallet.trade(
+                    amount=params["amount"],
+                    from_asset_id=params["from_asset"],
+                    to_asset_id=params["to_asset"],
+                )
+                trade.wait()
+                return {"transaction_hash": trade.transaction_hash}
+
+            elif strategy_type == "liquidity":
+                return await self._handle_liquidity_operation(params, optimization)
+
+            else:
+                raise ValueError(f"Unsupported strategy type: {strategy_type}")
+
+        except Exception as e:
+            logger.error(f"CDP trade execution failed: {str(e)}")
+            raise
+
+async def _handle_liquidity_operation(
+        self, 
+        params: Dict[str, Any], 
+        optimization: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Handle liquidity pool operations with optimized parameters.
+        """
+        position_manager_address = "0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2"
+        
+        optimized_params = {
+            "token0": params["token0_address"],
+            "token1": params["token1_address"],
+            "fee": str(optimization.get("optimal_fee_tier", 3000)),
+            "tickLower": str(optimization["tick_range"]["lower"]),
+            "tickUpper": str(optimization["tick_range"]["upper"]),
+            "amount0Desired": str(params["amount0"]),
+            "amount1Desired": str(params["amount1"]),
+            "amount0Min": "0",
+            "amount1Min": "0",
+            "recipient": self.agent_wallet.default_address.address_id,
+            "deadline": optimization.get("deadline", "999999999999999")
+        }
+
+        mint_position = self.agent_wallet.invoke_contract(
+            contract_address=position_manager_address,
+            method="mint",
+            args=optimized_params
+        )
+        mint_position.wait()
+        
+        return {
+            "status": "success",
+            "transaction_hash": mint_position.transaction_hash,
+            "optimization": optimization
+        }
+
+async def monitor_positions(self):
+        """
+        Monitor active positions with AI-driven risk management.
+        """
+        while True:
+            try:
+                # Get current market conditions
+                market_state = await self.market_analyzer.get_current_state()
+                
+                # Analyze all active positions
+                for position_id, position_data in self.active_positions.items():
+                    # Get AI prediction for position
+                    prediction = await self.market_predictor.predict_position_outcome(
+                        position_data=position_data,
+                        market_state=market_state
+                    )
+                    
+                    # Check if position needs adjustment
+                    if prediction["requires_action"]:
+                        await self._handle_position_adjustment(
+                            position_id=position_id,
+                            prediction=prediction
+                        )
+
+                await asyncio.sleep(self.config.get("monitoring_interval"))
+
+            except Exception as e:
+                logger.error(f"Position monitoring error: {str(e)}")
+                await asyncio.sleep(self.config.get("error_retry_interval"))
 
 # Function to generate art using DALL-E (requires separate OpenAI API key)
 def generate_art(prompt):
@@ -563,6 +858,173 @@ def deploy_nft(name, symbol, base_uri):
 
     except Exception as e:
         return f"Error deploying NFT contract: {str(e)}"
+async def deploy_nft_with_analysis(
+        self, 
+        name: str, 
+        symbol: str, 
+        base_uri: str
+    ) -> Dict[str, Any]:
+        """
+        Deploy NFT collection with AI-powered market analysis and optimization.
+        """
+        try:
+            # Analyze NFT market conditions
+            market_analysis = await self.market_analyzer.analyze_nft_market_conditions()
+            sentiment_data = await self.sentiment_scanner.analyze_nft_sentiment(name)
+            
+            # Generate market prediction
+            launch_prediction = await self.market_predictor.predict_nft_performance(
+                name=name,
+                market_state=market_analysis,
+                sentiment=sentiment_data
+            )
+
+            if not launch_prediction["recommendation"]["should_launch"]:
+                return {
+                    "status": "rejected",
+                    "reason": "Market conditions unfavorable",
+                    "analysis": launch_prediction
+                }
+
+            # Deploy NFT contract with optimized parameters
+            deployed_nft = self.agent_wallet.deploy_nft(
+                name=name,
+                symbol=symbol,
+                base_uri=base_uri
+            )
+            deployed_nft.wait()
+
+            # Monitor initial market reception
+            await self._monitor_nft_launch(
+                contract_address=deployed_nft.contract_address,
+                prediction=launch_prediction
+            )
+
+            return {
+                "status": "success",
+                "contract_address": deployed_nft.contract_address,
+                "market_analysis": market_analysis,
+                "prediction": launch_prediction,
+                "transaction_hash": deployed_nft.transaction_hash
+            }
+
+        except Exception as e:
+            logger.error(f"NFT deployment failed: {str(e)}")
+            return {"status": "error", "reason": str(e)}
+
+async def manage_social_integration(self):
+        """
+        Manage social media integration and sentiment analysis for market insights.
+        """
+        try:
+            # Initialize OpenAI client for content generation
+            self.openai_client = OpenAI()
+            
+            # Process market sentiment
+            market_sentiment = await self.sentiment_scanner.analyze_market_sentiment()
+            
+            if market_sentiment["requires_action"]:
+                await self._adjust_trading_parameters(market_sentiment)
+    
+            # Generate market insights
+            analysis = await self._generate_market_analysis()
+            
+            # Update portfolio strategy
+            await self.portfolio_manager.update_strategy(
+                sentiment=market_sentiment,
+                market_analysis=analysis
+            )
+    
+            return {
+                "status": "success",
+                "sentiment": market_sentiment,
+                "analysis": analysis
+            }
+    
+        except Exception as e:
+            logger.error(f"Social integration error: {str(e)}")
+            return {"status": "error", "reason": str(e)}
+
+async def handle_liquidity_management(
+        self, 
+        token_pairs: List[Dict[str, str]], 
+        amounts: List[Dict[str, float]]
+    ) -> Dict[str, Any]:
+        """
+        Manage liquidity positions with AI-optimized parameters and risk management.
+        """
+        try:
+            for token_pair, amount_pair in zip(token_pairs, amounts):
+                # Analyze liquidity conditions
+                pool_analysis = await self.market_analyzer.analyze_liquidity_pool(
+                    token0=token_pair["token0"],
+                    token1=token_pair["token1"]
+                )
+
+                # Generate position recommendation
+                recommendation = await self.market_predictor.predict_liquidity_position(
+                    pool_analysis=pool_analysis,
+                    amount0=amount_pair["amount0"],
+                    amount1=amount_pair["amount1"]
+                )
+
+                if recommendation["should_provide"]:
+                    # Execute liquidity provision with optimized parameters
+                    result = await self._provide_liquidity(
+                        token_pair=token_pair,
+                        amounts=amount_pair,
+                        optimization=recommendation["optimization"]
+                    )
+                    
+                    # Monitor position performance
+                    await self._monitor_liquidity_position(
+                        position_id=result["position_id"],
+                        recommendation=recommendation
+                    )
+
+            return {
+                "status": "success",
+                "positions": result,
+                "analysis": pool_analysis
+            }
+
+        except Exception as e:
+            logger.error(f"Liquidity management error: {str(e)}")
+            return {"status": "error", "reason": str(e)}
+
+async def _generate_market_analysis(self) -> Dict[str, Any]:
+        """
+        Generate comprehensive market analysis using AI models.
+        """
+        try:
+            # Collect market data
+            market_data = await self.market_analyzer.get_market_data()
+            technical_analysis = await self.pattern_detector.analyze_patterns(market_data)
+            sentiment_data = await self.sentiment_scanner.get_aggregated_sentiment()
+    
+            # Generate predictions
+            predictions = await self.market_predictor.generate_market_predictions(
+                market_data=market_data,
+                technical_analysis=technical_analysis,
+                sentiment_data=sentiment_data
+            )
+    
+            # Train models with new data
+            await self.model_trainer.train_models(
+                market_data=market_data,
+                sentiment_data=sentiment_data
+            )
+    
+            return {
+                "market_state": market_data,
+                "technical_analysis": technical_analysis,
+                "sentiment": sentiment_data,
+                "predictions": predictions
+            }
+    
+        except Exception as e:
+            logger.error(f"Market analysis generation failed: {str(e)}")
+            raise
 
 
 # Function to mint an NFT
@@ -918,3 +1380,155 @@ registrar_abi = [{
 #         my_new_function,
 #     ],
 # )
+class AIEnhancedAgent:
+    # Previous implementation remains...
+
+    async def system_health_monitor(self):
+        """
+        Monitor overall system health and performance with AI-driven optimization.
+        """
+        while True:
+            try:
+                # Analyze system performance
+                health_metrics = await self._collect_health_metrics()
+                analysis_result = await self._analyze_system_performance(health_metrics)
+
+                if analysis_result["requires_optimization"]:
+                    await self._optimize_system_parameters(analysis_result["recommendations"])
+
+                # Update performance metrics
+                await self._update_performance_metrics(health_metrics)
+
+                # Adjust AI models if needed
+                if analysis_result["model_performance_degraded"]:
+                    await self.model_trainer.optimize_models(health_metrics)
+
+                await asyncio.sleep(self.config.get("health_check_interval"))
+
+            except Exception as e:
+                logger.error(f"System health monitoring failed: {str(e)}")
+                await self._handle_system_error(e)
+
+    async def execute_complex_strategy(
+        self,
+        strategy_config: Dict[str, Any],
+        market_conditions: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Execute complex trading strategies combining multiple CDP operations.
+        """
+        try:
+            # Generate strategy execution plan
+            execution_plan = await self.market_predictor.generate_execution_plan(
+                strategy_config=strategy_config,
+                market_conditions=market_conditions
+            )
+
+            # Validate plan against risk parameters
+            risk_validation = await self.portfolio_manager.validate_execution_plan(
+                execution_plan=execution_plan
+            )
+
+            if not risk_validation["approved"]:
+                return {
+                    "status": "rejected",
+                    "reason": risk_validation["reason"],
+                    "risk_analysis": risk_validation["analysis"]
+                }
+
+            # Execute strategy steps
+            results = []
+            for step in execution_plan["steps"]:
+                step_result = await self._execute_strategy_step(step)
+                results.append(step_result)
+
+                if not step_result["success"]:
+                    await self._handle_strategy_failure(step, results)
+                    break
+
+                # Update market analysis after each step
+                await self._update_market_analysis(step_result)
+
+            return {
+                "status": "completed",
+                "results": results,
+                "performance_metrics": await self._calculate_strategy_performance(results)
+            }
+
+        except Exception as e:
+            logger.error(f"Complex strategy execution failed: {str(e)}")
+            await self._handle_strategy_error(e)
+            return {"status": "error", "reason": str(e)}
+
+    async def ai_model_maintenance(self):
+        """
+        Perform regular maintenance and optimization of AI models.
+        """
+        try:
+            # Collect performance metrics
+            model_metrics = await self._collect_model_metrics()
+            
+            # Analyze model performance
+            performance_analysis = await self.model_trainer.analyze_model_performance(
+                metrics=model_metrics
+            )
+
+            if performance_analysis["requires_retraining"]:
+                # Collect training data
+                training_data = await self._prepare_training_data()
+                
+                # Retrain models
+                training_result = await self.model_trainer.retrain_models(
+                    training_data=training_data,
+                    performance_metrics=model_metrics
+                )
+
+                # Validate and deploy new models
+                if training_result["validation_passed"]:
+                    await self._deploy_updated_models(training_result["models"])
+
+            return {
+                "status": "success",
+                "performance_analysis": performance_analysis,
+                "maintenance_actions": training_result if "training_result" in locals() else None
+            }
+
+        except Exception as e:
+            logger.error(f"AI model maintenance failed: {str(e)}")
+            return {"status": "error", "reason": str(e)}
+
+    async def generate_performance_report(self) -> Dict[str, Any]:
+        """
+        Generate comprehensive performance report with AI insights.
+        """
+        try:
+            # Collect performance data
+            trading_metrics = await self._collect_trading_metrics()
+            model_performance = await self._collect_model_performance()
+            system_health = await self._collect_health_metrics()
+
+            # Generate AI insights
+            insights = await self.market_predictor.generate_performance_insights(
+                trading_metrics=trading_metrics,
+                model_performance=model_performance
+            )
+
+            # Generate optimization recommendations
+            recommendations = await self._generate_optimization_recommendations(
+                insights=insights,
+                system_health=system_health
+            )
+
+            return {
+                "period": self._get_report_period(),
+                "trading_performance": trading_metrics,
+                "model_performance": model_performance,
+                "system_health": system_health,
+                "ai_insights": insights,
+                "recommendations": recommendations,
+                "next_steps": await self._generate_action_plan(recommendations)
+            }
+
+        except Exception as e:
+            logger.error(f"Performance report generation failed: {str(e)}")
+            return {"status": "error", "reason": str(e)}

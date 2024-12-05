@@ -1,205 +1,188 @@
 import time
 import json
+import asyncio
+from typing import Dict, Any, Optional
 from swarm import Swarm
 from swarm.repl import run_demo_loop
-from agents import based_agent, get_balance, request_eth_from_faucet, agent_wallet
 from openai import OpenAI
 
-def process_and_print_streaming_response(response):
-    content = ""
-    last_sender = ""
+from utils.logger import get_logger
+from utils.config_manager import ConfigManager
+from agents import AIEnhancedAgent
+from analysis.market_analyzer import MarketAnalyzer
+from risk.portfolio_manager import PortfolioManager
 
-    for chunk in response:
-        if "sender" in chunk:
-            last_sender = chunk["sender"]
+logger = get_logger(__name__)
 
-        if "content" in chunk and chunk["content"] is not None:
-            if not content and last_sender:
-                print(f"\033[94m{last_sender}:\033[0m", end=" ", flush=True)
-                last_sender = ""
-            print(chunk["content"], end="", flush=True)
-            content += chunk["content"]
+class EnhancedAgentRunner:
+    """
+    Runner class for managing AI-enhanced CDP agent operations.
+    """
+    
+    def __init__(self, config_path: str):
+        self.config = ConfigManager(config_path)
+        self.agent = AIEnhancedAgent(self.config.get_agent_config())
+        self.client = Swarm()
+        self.market_analyzer = MarketAnalyzer(self.config.get_market_config())
+        self.portfolio_manager = PortfolioManager(self.config.get_risk_config())
+        
+    async def process_streaming_response(self, response) -> Optional[Dict[str, Any]]:
+        """Process streaming responses from the agent with enhanced logging."""
+        content = ""
+        last_sender = ""
 
-        if "tool_calls" in chunk and chunk["tool_calls"] is not None:
-            for tool_call in chunk["tool_calls"]:
-                f = tool_call["function"]
-                name = f["name"]
-                if not name:
-                    continue
-                print(f"\033[94m{last_sender}: \033[95m{name}\033[0m()")
-
-        if "delim" in chunk and chunk["delim"] == "end" and content:
-            print()  # End of response message
-            content = ""
-
-        if "response" in chunk:
-            return chunk["response"]
-
-def pretty_print_messages(messages) -> None:
-    for message in messages:
-        if message["role"] != "assistant":
-            continue
-
-        # print agent name in blue
-        print(f"\033[94m{message['sender']}\033[0m:", end=" ")
-
-        # print response, if any
-        if message["content"]:
-            print(message["content"])
-
-        # print tool calls in purple, if any
-        tool_calls = message.get("tool_calls") or []
-        if len(tool_calls) > 1:
-            print()
-        for tool_call in tool_calls:
-            f = tool_call["function"]
-            name, args = f["name"], f["arguments"]
-            arg_str = json.dumps(json.loads(args)).replace(":", "=")
-            print(f"\033[95m{name}\033[0m({arg_str[1:-1]})")
-
-def run_autonomous_loop(agent, interval=10):
-    client = Swarm()
-    messages = []
-
-    print("\nStarting autonomous Based Agent loop...")
-
-    # Display initial wallet information
-    print(f"\nAgent wallet address: {agent_wallet.default_address.address_id}")
-
-    # Request ETH from faucet and display transaction
-    try:
-        faucet_result = request_eth_from_faucet()
-        print(f"Faucet transaction: {faucet_result}")
-    except Exception as e:
-        print(f"Error requesting from faucet: {str(e)}")
-
-    # Display current balance
-    try:
-        balance = get_balance("eth")
-        print(f"Current ETH balance: {balance}")
-    except Exception as e:
-        print(f"Error getting balance: {str(e)}")
-
-    print("\n" + "="*50 + "\n")  # Separator line
-
-    while True:
         try:
-            # Generate a thought
-            thought = (
-                "Be creative and do something interesting on the Base blockchain. "
-                "Don't take any more input from me. Choose an action and execute it now. "
-                "Choose those that highlight your identity and abilities best."
-            )
-            messages.append({"role": "user", "content": thought})
+            for chunk in response:
+                if "sender" in chunk:
+                    last_sender = chunk["sender"]
+                    logger.info(f"Message from: {last_sender}")
 
-            print(f"\n\033[90mSystem:\033[0m {thought}")
+                if "content" in chunk and chunk["content"]:
+                    content_chunk = self._format_content(last_sender, chunk["content"])
+                    print(content_chunk, end="", flush=True)
+                    content += chunk["content"]
 
-            # Run the agent
-            response = client.run(agent=agent, messages=messages, stream=True)
+                if "tool_calls" in chunk and chunk["tool_calls"]:
+                    await self._handle_tool_calls(chunk["tool_calls"], last_sender)
 
-            # Process and print the streaming response
-            response_obj = process_and_print_streaming_response(response)
+                if "delim" in chunk and chunk["delim"] == "end" and content:
+                    print()
+                    content = ""
 
-            # Update messages with the new response
-            if response_obj:
-                messages.extend(response_obj.messages)
-
-            # Pretty print any non-streaming messages
-            pretty_print_messages(response_obj.messages if response_obj else [])
-
-            # Wait for the specified interval
-            time.sleep(interval)
+                if "response" in chunk:
+                    return chunk["response"]
 
         except Exception as e:
-            print(f"\nError in autonomous loop: {str(e)}")
-            time.sleep(interval)  # Still wait before retrying
+            logger.error(f"Error processing stream: {str(e)}")
+            return None
 
-def run_openai_conversation_loop(agent):
-    """Facilitates a conversation between an OpenAI-powered agent and the Based Agent."""
-    client = Swarm()
-    openai_client = OpenAI()
-    messages = []
+    async def run_autonomous_mode(self, interval: int = 10):
+        """Run agent in autonomous mode with AI-driven decision making."""
+        messages = []
+        
+        logger.info("Starting autonomous AI-enhanced agent...")
+        await self._display_initial_status()
 
-    print("Starting OpenAI-Based Agent conversation loop...")
+        while True:
+            try:
+                # Get market analysis
+                market_state = await self.market_analyzer.get_current_state()
+                
+                # Generate AI-driven strategy
+                strategy = await self.agent.generate_strategy(market_state)
+                
+                # Validate strategy against risk parameters
+                if await self.portfolio_manager.validate_strategy(strategy):
+                    # Execute strategy
+                    execution_result = await self.agent.execute_ai_trading(
+                        strategy_type=strategy["type"],
+                        params=strategy["params"]
+                    )
+                    
+                    # Record results and update models
+                    await self._record_execution_results(execution_result)
+                    
+                    # Generate and display performance report
+                    await self._display_performance_update(execution_result)
 
-    # Initial prompt to start the conversation
-    openai_messages = [{
-        "role": "system",
-        "content": (
-            "You are a user guiding a blockchain agent through various tasks on the Base blockchain. "
-            "Engage in a conversation, suggesting actions and responding to the agent's outputs. "
-            "Be creative and explore different blockchain capabilities. Options include creating tokens, "
-            "transferring assets, minting NFTs, and getting balances. You're not simulating a conversation, "
-            "but you will be in one yourself. Make sure you follow the rules of improv and always ask for some "
-            "sort of function to occur. Be unique and interesting."
-        )
-    }, {
-        "role": "user",
-        "content": "Start a conversation with the Based Agent and guide it through some blockchain tasks."
-    }]
+                await asyncio.sleep(interval)
+                
+            except Exception as e:
+                logger.error(f"Autonomous mode error: {str(e)}")
+                await asyncio.sleep(self.config.get("error_retry_interval"))
 
-    while True:
-        # Generate OpenAI response
-        openai_response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo", messages=openai_messages)
+    async def run_interactive_mode(self):
+        """Run agent in interactive mode with AI assistance."""
+        logger.info("Starting interactive AI-enhanced agent mode...")
+        
+        while True:
+            try:
+                user_input = input("\nEnter command (or 'exit' to quit): ")
+                if user_input.lower() == 'exit':
+                    break
 
-        openai_message = openai_response.choices[0].message.content
-        print(f"\n\033[92mOpenAI Guide:\033[0m {openai_message}")
+                # Analyze command with AI
+                analyzed_command = await self.agent.analyze_user_command(user_input)
+                
+                # Execute command with AI optimization
+                execution_result = await self.agent.execute_command(analyzed_command)
+                
+                # Display results
+                await self._display_execution_results(execution_result)
+                
+            except Exception as e:
+                logger.error(f"Interactive mode error: {str(e)}")
 
-        # Send OpenAI's message to Based Agent
-        messages.append({"role": "user", "content": openai_message})
-        response = client.run(agent=agent, messages=messages, stream=True)
-        response_obj = process_and_print_streaming_response(response)
+    async def run_ai_conversation_mode(self):
+        """Run agent in AI conversation mode with enhanced analysis."""
+        openai_client = OpenAI()
+        messages = []
 
-        # Update messages with Based Agent's response
-        messages.extend(response_obj.messages)
+        logger.info("Starting AI conversation mode...")
 
-        # Add Based Agent's response to OpenAI conversation
-        based_agent_response = response_obj.messages[-1]["content"] if response_obj.messages else "No response from Based Agent."
-        openai_messages.append({
-            "role": "user",
-            "content": f"Based Agent response: {based_agent_response}"
-        })
+        while True:
+            try:
+                # Generate AI response with market context
+                market_context = await self.market_analyzer.get_market_context()
+                ai_response = await self._generate_ai_response(openai_client, market_context)
+                
+                # Process AI command through agent
+                execution_result = await self.agent.process_ai_command(ai_response)
+                
+                # Update conversation state
+                messages.extend(self._format_conversation(ai_response, execution_result))
+                
+                # Check for continuation
+                if not await self._should_continue_conversation():
+                    break
+                    
+            except Exception as e:
+                logger.error(f"AI conversation error: {str(e)}")
 
-        # Check if user wants to continue
-        user_input = input("\nPress Enter to continue the conversation, or type 'exit' to end: ")
-        if user_input.lower() == 'exit':
-            break
+    @staticmethod
+    def choose_mode() -> str:
+        """Enhanced mode selection with validation."""
+        while True:
+            print("\nAvailable modes:")
+            print("1. interactive - Interactive trading mode with AI assistance")
+            print("2. autonomous  - Autonomous trading with AI optimization")
+            print("3. ai-conversation - AI-guided trading conversation")
 
-def choose_mode():
-    while True:
-        print("\nAvailable modes:")
-        print("1. chat    - Interactive chat mode")
-        print("2. auto    - Autonomous action mode")
-        print("3. two-agent - AI-to-agent conversation mode")
+            choice = input("\nChoose mode (enter number or name): ").lower().strip()
 
-        choice = input("\nChoose a mode (enter number or name): ").lower().strip()
+            mode_map = {
+                '1': 'interactive',
+                '2': 'autonomous',
+                '3': 'ai-conversation',
+                'interactive': 'interactive',
+                'autonomous': 'autonomous',
+                'ai-conversation': 'ai-conversation'
+            }
 
-        mode_map = {
-            '1': 'chat',
-            '2': 'auto',
-            '3': 'two-agent',
-            'chat': 'chat',
-            'auto': 'auto',
-            'two-agent': 'two-agent'
-        }
-
-        if choice in mode_map:
-            return mode_map[choice]
-        print("Invalid choice. Please try again.")
+            if choice in mode_map:
+                return mode_map[choice]
+            print("Invalid choice. Please try again.")
 
 def main():
-    mode = choose_mode()
+    """Main entry point with enhanced error handling and logging."""
+    try:
+        config_path = "config/agent_config.yaml"
+        runner = EnhancedAgentRunner(config_path)
+        
+        mode = runner.choose_mode()
+        logger.info(f"Starting agent in {mode} mode")
 
-    mode_functions = {
-        'chat': lambda: run_demo_loop(based_agent),
-        'auto': lambda: run_autonomous_loop(based_agent),
-        'two-agent': lambda: run_openai_conversation_loop(based_agent)
-    }
+        mode_map = {
+            'interactive': runner.run_interactive_mode,
+            'autonomous': runner.run_autonomous_mode,
+            'ai-conversation': runner.run_ai_conversation_mode
+        }
 
-    print(f"\nStarting {mode} mode...")
-    mode_functions[mode]()
+        asyncio.run(mode_map[mode]())
+        
+    except Exception as e:
+        logger.error(f"Critical error in main: {str(e)}")
+        raise
 
 if __name__ == "__main__":
-    print("Starting Based Agent...")
     main()
