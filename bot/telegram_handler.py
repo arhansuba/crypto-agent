@@ -11,6 +11,10 @@ from typing import Dict, Optional
 from .ai.agent import CDPTradingAgent
 from .services.subscription import SubscriptionService
 from .services.user_manager import UserManager
+# Add new imports for CDP integration
+from ..agent.core import BaseCDPAgent
+from ..agent.strategies.arbitrage.cdp_dex_monitor import CDPDEXMonitor
+from agent.execution.cdp_executor import CDPExecutor
 
 class TelegramBot:
     def __init__(self, config: Dict):
@@ -20,11 +24,18 @@ class TelegramBot:
         self.agent = CDPTradingAgent(config)
         self.subscription_service = SubscriptionService()
         self.user_manager = UserManager()
+        
+        # Add CDP components
+        self.cdp_agent = BaseCDPAgent(config)
+        self.dex_monitor = CDPDEXMonitor(self.cdp_agent)
+        self.executor = CDPExecutor()
 
     async def initialize(self) -> None:
         """Initialize bot and its components"""
         # Initialize CDP agent
         await self.agent.initialize()
+        await self.cdp_agent.initialize()
+        await self.dex_monitor.start_monitoring()
         
         # Create application
         self.application = Application.builder().token(self.config["telegram_token"]).build()
@@ -36,24 +47,92 @@ class TelegramBot:
 
     def _register_handlers(self) -> None:
         """Register all command and message handlers"""
-        # Core commands
+        # Keep existing handlers
         self.application.add_handler(CommandHandler("start", self.cmd_start))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
-        
-        # Analysis commands
         self.application.add_handler(CommandHandler("analyze", self.cmd_analyze))
         self.application.add_handler(CommandHandler("monitor", self.cmd_monitor))
         self.application.add_handler(CommandHandler("alerts", self.cmd_alerts))
-        
-        # Subscription commands
         self.application.add_handler(CommandHandler("subscribe", self.cmd_subscribe))
         self.application.add_handler(CommandHandler("status", self.cmd_status))
         
-        # General message handler
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        # Add new CDP-specific handlers
+        self.application.add_handler(CommandHandler("deploy", self.cmd_deploy_token))
+        self.application.add_handler(CommandHandler("trade", self.cmd_execute_trade))
+        self.application.add_handler(CommandHandler("liquidity", self.cmd_add_liquidity))
         
-        # Error handler
+        # Keep existing message and error handlers
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
+
+    # Add new CDP command handlers
+    async def cmd_deploy_token(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /deploy command for token deployment"""
+        user_id = update.effective_user.id
+        if not await self.subscription_service.verify_premium(user_id):
+            await update.message.reply_text("Token deployment requires a premium subscription.")
+            return
+
+        try:
+            token_params = self._parse_token_params(context.args)
+            deployment_result = await self.cdp_agent.deploy_token(token_params)
+            await update.message.reply_text(
+                f"Token deployed successfully!\nAddress: {deployment_result['address']}"
+            )
+        except Exception as e:
+            self.logger.error(f"Token deployment error: {e}")
+            await update.message.reply_text("Token deployment failed. Please check parameters.")
+
+    async def cmd_execute_trade(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /trade command for executing trades"""
+        user_id = update.effective_user.id
+        try:
+            trade_params = self._parse_trade_params(context.args)
+            trade_result = await self.executor.execute_trade(trade_params)
+            await update.message.reply_text(
+                f"Trade executed successfully!\nTx: {trade_result['tx_hash']}"
+            )
+        except Exception as e:
+            self.logger.error(f"Trade execution error: {e}")
+            await update.message.reply_text("Trade execution failed. Please check parameters.")
+
+    async def cmd_add_liquidity(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /liquidity command for adding liquidity"""
+        user_id = update.effective_user.id
+        try:
+            liquidity_params = self._parse_liquidity_params(context.args)
+            result = await self.cdp_agent.add_liquidity(liquidity_params)
+            await update.message.reply_text(
+                f"Liquidity added successfully!\nPool: {result['pool_address']}"
+            )
+        except Exception as e:
+            self.logger.error(f"Liquidity addition error: {e}")
+            await update.message.reply_text("Failed to add liquidity. Please check parameters.")
+
+    # Keep all existing methods and add helper methods for the new commands
+    def _parse_token_params(self, args) -> Dict:
+        """Parse token deployment parameters"""
+        return {
+            "name": args[0],
+            "symbol": args[1],
+            "supply": int(args[2]) if len(args) > 2 else 1000000
+        }
+
+    def _parse_trade_params(self, args) -> Dict:
+        """Parse trade parameters"""
+        return {
+            "token_address": args[0],
+            "amount": float(args[1]),
+            "is_buy": args[2].lower() == "buy" if len(args) > 2 else True
+        }
+
+    def _parse_liquidity_params(self, args) -> Dict:
+        """Parse liquidity parameters"""
+        return {
+            "token_address": args[0],
+            "eth_amount": float(args[1]),
+            "token_amount": float(args[2])
+        }
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command"""

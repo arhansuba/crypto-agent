@@ -11,6 +11,12 @@ from utils.config_manager import ConfigManager
 from agents import AIEnhancedAgent
 from analysis.market_analyzer import MarketAnalyzer
 from risk.portfolio_manager import PortfolioManager
+# Add new imports while keeping existing ones
+from cdp_core.base_agent import BaseCDPAgent
+from core.brain import Brain
+from execution.cdp_executor import CDPExecutor
+from strategies.arbitrage.cdp_dex_monitor import CDPDEXMonitor
+from bot.telegram_handler import TelegramHandler
 
 logger = get_logger(__name__)
 
@@ -26,6 +32,43 @@ class EnhancedAgentRunner:
         self.market_analyzer = MarketAnalyzer(self.config.get_market_config())
         self.portfolio_manager = PortfolioManager(self.config.get_risk_config())
         
+        # Add CDP components without removing existing ones
+        self.base_cdp_agent = BaseCDPAgent(self.config.get_agent_config())
+        self.brain = Brain()
+        self.executor = CDPExecutor()
+        self.dex_monitor = CDPDEXMonitor(self.base_cdp_agent)
+        self.telegram_handler = TelegramHandler(self)
+           # Initialize strategy monitoring
+        self._init_strategy_monitoring()
+
+    def _init_strategy_monitoring(self):
+        """Initialize strategy monitoring components."""
+        self.strategy_monitors = {
+            'arbitrage': self.dex_monitor,
+            'market_making': self._create_market_making_monitor(),
+            'liquidity': self._create_liquidity_monitor()
+        }
+        
+    async def initialize_components(self):
+        """Initialize all agent components with proper error handling."""
+        try:
+            # Initialize CDP components
+            await self.base_agent.initialize()
+            await self.telegram_handler.start()
+            
+            # Initialize strategy monitors
+            for monitor in self.strategy_monitors.values():
+                await monitor.start()
+                
+            # Initialize market analysis components
+            await self.market_analyzer.initialize()
+            
+            logger.info("All components initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Component initialization error: {str(e)}")
+            raise
+
     async def process_streaming_response(self, response) -> Optional[Dict[str, Any]]:
         """Process streaming responses from the agent with enhanced logging."""
         content = ""
@@ -62,6 +105,11 @@ class EnhancedAgentRunner:
         
         logger.info("Starting autonomous AI-enhanced agent...")
         await self._display_initial_status()
+        
+        # Initialize CDP components
+        await self.base_cdp_agent.initialize()
+        await self.telegram_handler.start()
+        await self.dex_monitor.start_monitoring()
 
         while True:
             try:
@@ -73,10 +121,11 @@ class EnhancedAgentRunner:
                 
                 # Validate strategy against risk parameters
                 if await self.portfolio_manager.validate_strategy(strategy):
-                    # Execute strategy
-                    execution_result = await self.agent.execute_ai_trading(
-                        strategy_type=strategy["type"],
-                        params=strategy["params"]
+                    # Execute strategy with CDP integration
+                    execution_result = await self.executor.execute_strategy(
+                        strategy,
+                        self.base_cdp_agent,
+                        strategy["params"]
                     )
                     
                     # Record results and update models
@@ -90,6 +139,28 @@ class EnhancedAgentRunner:
             except Exception as e:
                 logger.error(f"Autonomous mode error: {str(e)}")
                 await asyncio.sleep(self.config.get("error_retry_interval"))
+    async def _validate_and_execute_strategy(self, strategy: Dict) -> bool:
+        """Enhanced strategy validation and execution."""
+        try:
+            # Validate strategy
+            if not await self.portfolio_manager.validate_strategy(strategy):
+                logger.warning("Strategy validation failed")
+                return False
+                
+            # Execute with CDP integration
+            execution_result = await self.executor.execute_strategy(
+                strategy,
+                self.base_agent,
+                self.market_analyzer.get_current_market_data()
+            )
+            
+            # Record results
+            await self._record_execution_results(execution_result)
+            return True
+            
+        except Exception as e:
+            logger.error(f"Strategy execution error: {str(e)}")
+            return False
 
     async def run_interactive_mode(self):
         """Run agent in interactive mode with AI assistance."""

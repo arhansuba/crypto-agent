@@ -7,9 +7,9 @@ import os
 import json
 import logging
 import asyncio
-from typing import Dict, List, Optional, Tuple, Any
+import sys
+from typing import Dict, Tuple, Any
 from datetime import datetime
-from dataclasses import dataclass
 from enum import Enum
 
 import yaml
@@ -20,12 +20,20 @@ from cdp_langchain.utils import CdpAgentkitWrapper
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
 from langgraph.prebuilt import create_react_agent
+from strategies.arbitrage.cdp_dex_monitor import CDPDEXMonitor
+from strategies.token_launch.launch_detector import LaunchDetector
+from execution.cdp_executor import CDPExecutor
+from risk.portfolio_manager import PortfolioManager
+from social.sentiment import SentimentAnalyzer
+
 
 class AgentMode(Enum):
-    # Add your enum values here
-    pass
+    AUTONOMOUS = "autonomous"
+    INTERACTIVE = "interactive"
+    ANALYSIS = "analysis"
+    STRATEGY_TESTING = "strategy_testing"
+    PORTFOLIO_MANAGEMENT = "portfolio_management"
 
-# Add your dataclass and other code here
 
 class AgentCore:
     """
@@ -52,6 +60,32 @@ class AgentCore:
         
         # Track operation mode
         self.mode = AgentMode(self.config['agent']['mode'])
+        
+        # Initialize strategy-specific components
+        self.initialize_strategy_components()
+        
+        self.event_handlers = {}
+        self.setup_event_handlers()
+        
+    def setup_event_handlers(self):
+        """Setup event handlers for inter-component communication"""
+        self.event_handlers.update({
+            'market_opportunity': self.handle_market_opportunity,
+            'risk_threshold_breach': self.handle_risk_breach,
+            'portfolio_rebalance': self.handle_portfolio_rebalance,
+            'sentiment_shift': self.handle_sentiment_shift
+        })
+
+    async def handle_market_opportunity(self, data: Dict):
+        """Handle market opportunity events"""
+        try:
+            if await self._check_security_constraints("opportunity", data.get('value', 0)):
+                await self.orchestrate_strategy_execution(
+                    strategy_type="market_opportunity",
+                    parameters=data
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to handle market opportunity: {str(e)}")
         
     def _load_config(self, config_path: str) -> Dict:
         """Load and merge configuration files"""
@@ -127,24 +161,49 @@ class AgentCore:
         )
     
     def _initialize_state(self) -> AgentState:
-        """Initialize agent state with current blockchain data"""
         try:
             wallet_details = self.cdp_wrapper.get_wallet_details()
             balance = float(wallet_details['balance'])
             
-            return AgentState(
+            # Add historical state tracking
+            self.state_history = []
+            self.state_snapshot_interval = self.config['monitoring'].get('state_snapshot_interval', 3600)
+            
+            state = AgentState(
                 wallet_address=wallet_details['address'],
                 current_balance=balance,
                 active_contracts=[],
                 pending_transactions=[],
                 last_action_timestamp=datetime.now().timestamp(),
                 daily_transaction_count=0,
-                total_value_locked=0.0
+                total_value_locked=0.0,
+                performance_metrics={
+                    'win_rate': 0.0,
+                    'average_profit': 0.0,
+                    'sharpe_ratio': 0.0
+                },
+                risk_metrics={
+                    'var': 0.0,
+                    'max_drawdown': 0.0,
+                    'current_exposure': 0.0
+                }
             )
+            
+            # Start state tracking
+            asyncio.create_task(self._track_state_history(state))
+            return state
             
         except Exception as e:
             self.logger.error(f"State initialization failed: {str(e)}")
             raise
+
+    async def _track_state_history(self, state: AgentState):
+        """Track historical state for analysis"""
+        while True:
+            self.state_history.append(state.copy())
+            if len(self.state_history) > self.config['monitoring'].get('max_state_history', 1000):
+                self.state_history.pop(0)
+            await asyncio.sleep(self.state_snapshot_interval)
     
     async def _check_security_constraints(self, action: str, value: float) -> bool:
         """Verify action against security constraints"""
@@ -274,34 +333,30 @@ class AgentCore:
             raise
     
     async def run_autonomous_mode(self):
-        """Execute autonomous operations based on market analysis"""
-        self.logger.info("Starting autonomous mode")
-        
+        """Execute autonomous operations with enhanced strategy orchestration"""
+        self.logger.info("Starting autonomous mode with enhanced orchestration")
+
         while self.mode == AgentMode.AUTONOMOUS:
             try:
-                # Analyze market conditions
+                # Start opportunity monitoring
+                await self.monitor_opportunities()
+
+                # Analyze market conditions and portfolio state
                 analysis = await self.analyze_market_conditions()
-                
-                # Execute recommended actions
+                await self.optimize_portfolio()
+
+                # Execute recommended actions with orchestration
                 if 'recommended_actions' in analysis:
                     for action in analysis['recommended_actions']:
-                        if action['type'] == 'deploy_token':
-                            await self.deploy_token(
-                                action['name'],
-                                action['symbol'],
-                                action['initial_supply']
-                            )
-                        elif action['type'] == 'create_liquidity':
-                            await self.create_liquidity_pool(
-                                action['token_address'],
-                                action['eth_amount']
-                            )
-                
-                # Wait for next iteration
+                        await self.orchestrate_strategy_execution(
+                            strategy_type=action['type'],
+                            parameters=action['parameters']
+                        )
+
                 await asyncio.sleep(self.config['decision_making']['decision_interval'])
-                
+
             except Exception as e:
-                self.logger.error(f"Autonomous mode error: {str(e)}")
+                self.logger.error(f"Enhanced autonomous mode error: {str(e)}")
                 await asyncio.sleep(60)
     
     async def process_user_command(self, command: str) -> Dict:
@@ -340,3 +395,149 @@ class AgentCore:
             raise
         finally:
             self.logger.info("Agent shutdown complete")
+    
+    def initialize_strategy_components(self):
+        """Initialize strategy-specific components"""
+        self.dex_monitor = CDPDEXMonitor(self.cdp_wrapper)
+        self.launch_detector = LaunchDetector(self.config['strategies']['token_launch'])
+        self.executor = CDPExecutor(self.config['execution'])
+        self.portfolio_manager = PortfolioManager(self.config['risk'])
+        self.sentiment_analyzer = SentimentAnalyzer(self.config['social'])
+
+    async def orchestrate_strategy_execution(self, strategy_type: str, parameters: Dict) -> Dict:
+        """Orchestrate the execution of a specific trading strategy"""
+        try:
+            # Validate strategy against risk parameters
+            risk_validation = await self.portfolio_manager.validate_strategy(
+                strategy_type,
+                parameters
+            )
+            
+            if not risk_validation['approved']:
+                self.logger.warning(f"Strategy rejected: {risk_validation['reason']}")
+                return {'status': 'rejected', 'reason': risk_validation['reason']}
+
+            # Check market conditions
+            market_conditions = await self.analyze_market_conditions()
+            if not market_conditions['favorable']:
+                return {'status': 'delayed', 'reason': 'Unfavorable market conditions'}
+
+            # Execute strategy
+            execution_result = await self.executor.execute_strategy(
+                strategy_type=strategy_type,
+                parameters=parameters,
+                market_conditions=market_conditions
+            )
+
+            # Update portfolio state
+            await self.portfolio_manager.update_portfolio_state(execution_result)
+
+            return {'status': 'success', 'result': execution_result}
+
+        except Exception as e:
+            self.logger.error(f"Strategy execution failed: {str(e)}")
+            raise
+
+    async def monitor_opportunities(self):
+        """Monitor various opportunities across different strategies"""
+        try:
+            # Start monitoring tasks concurrently
+            monitoring_tasks = [
+                self.dex_monitor.monitor_arbitrage_opportunities(),
+                self.launch_detector.monitor_new_launches(),
+                self.sentiment_analyzer.monitor_sentiment()
+            ]
+
+            # Create monitoring task group
+            async with asyncio.TaskGroup() as group:
+                for task in monitoring_tasks:
+                    group.create_task(task)
+
+        except Exception as e:
+            self.logger.error(f"Opportunity monitoring failed: {str(e)}")
+            raise
+
+    async def optimize_portfolio(self):
+        """Optimize portfolio based on current market conditions and risk parameters"""
+        try:
+            # Get current portfolio state
+            portfolio_state = await self.portfolio_manager.get_portfolio_state()
+    
+            # Analyze market conditions
+            market_analysis = await self.analyze_market_conditions()
+    
+            # Generate optimization recommendations
+            optimization_actions = await self.portfolio_manager.generate_optimization_actions(
+                portfolio_state,
+                market_analysis
+            )
+    
+            # Execute optimization actions
+            for action in optimization_actions:
+                await self.orchestrate_strategy_execution(
+                    strategy_type=action['type'],
+                    parameters=action['parameters']
+                )
+    
+            return {'status': 'success', 'actions': optimization_actions}
+    
+        except Exception as e:
+            self.logger.error(f"Portfolio optimization failed: {str(e)}")
+            raise
+    async def monitor_performance(self):
+        """Monitor agent performance and implement recovery mechanisms"""
+        while True:
+            try:
+                # Calculate performance metrics
+                current_metrics = await self._calculate_performance_metrics()
+                
+                # Check for performance degradation
+                if self._detect_performance_degradation(current_metrics):
+                    await self._implement_recovery_measures()
+                
+                # Update state with new metrics
+                self.state.performance_metrics.update(current_metrics)
+                
+                await asyncio.sleep(self.config['monitoring']['performance_check_interval'])
+                
+            except Exception as e:
+                self.logger.error(f"Performance monitoring error: {str(e)}")
+                await asyncio.sleep(60)
+
+    async def _calculate_performance_metrics(self) -> Dict:
+        """Calculate comprehensive performance metrics"""
+        try:
+            trades = await self.portfolio_manager.get_trading_history()
+            return {
+                'win_rate': self._calculate_win_rate(trades),
+                'average_profit': self._calculate_average_profit(trades),
+                'sharpe_ratio': self._calculate_sharpe_ratio(trades),
+                'max_drawdown': self._calculate_max_drawdown(trades)
+            }
+        except Exception as e:
+            self.logger.error(f"Metrics calculation failed: {str(e)}")
+            raise
+    async def emergency_shutdown(self, reason: str):
+        """Implement emergency shutdown with position unwinding"""
+        try:
+            self.logger.warning(f"Initiating emergency shutdown: {reason}")
+            
+            # Stop all monitoring tasks
+            for task in asyncio.all_tasks():
+                if task != asyncio.current_task():
+                    task.cancel()
+            
+            # Unwind open positions
+            await self._unwind_positions()
+            
+            # Save final state
+            await self._save_final_state()
+            
+            # Notify administrators
+            await self._send_emergency_notification(reason)
+            
+        except Exception as e:
+            self.logger.error(f"Emergency shutdown failed: {str(e)}")
+            raise
+        finally:
+            sys.exit(1)
