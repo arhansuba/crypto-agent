@@ -340,32 +340,35 @@ class CryptoAgentLogger:
                 errors.append(current_error)
         
         return [e for e in errors if logging.getLevelName(e['level']) >= min_level]
-    def get_logger(name: str, log_file: str = 'app.log', level: int = logging.INFO) -> logging.Logger:
-        """Set up and return a logger instance."""
-        logger = logging.getLogger(name)
-        logger.setLevel(level)
 
-        # Create file handler which logs even debug messages
-        fh = logging.FileHandler(log_file)
-        fh.setLevel(level)
+import logging
 
-        # Create console handler with a higher log level
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.ERROR)
+def get_logger(name: str, log_file: str = 'app.log', level: int = logging.INFO) -> logging.Logger:
+    """Set up and return a logger instance."""
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
 
-        # Create formatter and add it to the handlers
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        fh.setFormatter(formatter)
-        ch.setFormatter(formatter)
+    # Create file handler which logs even debug messages
+    fh = logging.FileHandler(log_file)
+    fh.setLevel(level)
 
-        # Add the handlers to the logger
-        logger.addHandler(fh)
-        logger.addHandler(ch)
+    # Create console handler with a higher log level
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.ERROR)
 
-        return logger
+    # Create formatter and add it to the handlers
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+
+    # Add the handlers to the logger
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+
+    return logger
 
 # Example usage
 if __name__ == "__main__":
     logger = get_logger(__name__)
     logger.info("This is an info message")
-    logger.error("This is an error message") 
+    logger.error("This is an error message")

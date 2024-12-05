@@ -31,7 +31,7 @@ class TrainingMetrics:
     max_drawdown: float
     timestamp: datetime
 
-class ModelTrainer:
+class AIModelTrainer:
     """
     Comprehensive training system for market prediction and risk analysis models.
     Includes advanced training features and performance monitoring.

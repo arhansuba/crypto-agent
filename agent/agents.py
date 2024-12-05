@@ -19,7 +19,7 @@ from analysis.sentiment_scanner import SentimentScanner
 from risk.portfolio_manager import PortfolioManager
 from utils.logger import get_logger
 from utils.config_manager import ConfigManager
-
+#from cdp import EnhancedCDPAgent
 logger = get_logger(__name__)
 
 class AIEnhancedAgent:
@@ -27,7 +27,13 @@ class AIEnhancedAgent:
     Enhanced CDP agent that combines Coinbase Developer Platform capabilities with 
     AI-powered analysis and decision making.
     """
-    
+    def __init__(self):
+        #self.agent = EnhancedCDPAgent()
+        self.agent.initialize_wallet()
+
+    def perform_action(self):
+        self.agent.perform_action()
+        
     def __init__(self, config: Dict[str, Any]):
         # Initialize configuration
         self.config = ConfigManager(config)
@@ -1532,3 +1538,39 @@ class AIEnhancedAgent:
         except Exception as e:
             logger.error(f"Performance report generation failed: {str(e)}")
             return {"status": "error", "reason": str(e)}
+from cdp import EnhancedCDPAgent
+from ai.training.trainer import AIModelTrainer
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+class AIEnhancedAgent:
+    def __init__(self):
+        self.agent = EnhancedCDPAgent()
+        self.agent.initialize_wallet()
+
+    def perform_action(self):
+        self.agent.perform_action()
+
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+class AIEnhancedAgent:
+    def __init__(self):
+        self.agent = None
+        self.wallet = None
+
+    def initialize(self):
+        from cdp import EnhancedCDPAgent
+        self.agent = EnhancedCDPAgent()
+        self.agent.initialize_wallet()
+
+    def perform_action(self):
+        self.agent.perform_action()
+
+# Example usage
+if __name__ == "__main__":
+    agent = AIEnhancedAgent()
+    agent.initialize()
+    agent.perform_action()
